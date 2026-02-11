@@ -241,6 +241,64 @@ function sendPrivateHand(room: Room, playerId: string) {
   io.to(player.socketId).emit('hand:private', { cards: player.hand });
 }
 
+function clearRoom(roomId: string) {
+  clearTurnTimer(roomId);
+  clearRematchTimer(roomId);
+  rooms.delete(roomId);
+}
+
+function removePlayerFromRoom(room: Room, playerId: string) {
+  const idx = room.players.findIndex((p) => p.playerId === playerId);
+  if (idx < 0) return;
+
+  room.players.splice(idx, 1);
+  room.passed.delete(playerId);
+  room.tablePlays = room.tablePlays.filter((x) => x.playerId !== playerId);
+
+  if (room.lastPlay?.playerId === playerId) {
+    room.lastPlay = null;
+    room.tablePlays = [];
+    room.trickNo += 1;
+    room.passed.clear();
+  }
+
+  if (room.winnerId === playerId) {
+    room.winnerId = null;
+    room.result = null;
+  }
+
+  if (room.currentPlayerId === playerId) {
+    room.currentPlayerId = room.players[0]?.playerId ?? null;
+  }
+
+  if (room.players.length === 0) {
+    clearRoom(room.roomId);
+    return;
+  }
+
+  if (room.phase !== 'lobby' && room.players.length < 2) {
+    room.phase = 'lobby';
+    room.currentPlayerId = null;
+    room.lastPlay = null;
+    room.tablePlays = [];
+    room.trickNo = 1;
+    room.passed.clear();
+    room.firstMove = false;
+    room.winnerId = null;
+    room.turnEndsAt = null;
+    room.rematchStartsAt = null;
+    room.whiteWinKind = null;
+    room.chopEvents = [];
+    room.result = null;
+    for (const p of room.players) {
+      p.hand = [];
+      p.ready = false;
+    }
+    clearTurnTimer(room.roomId);
+    clearRematchTimer(room.roomId);
+  }
+}
+
 io.on('connection', (socket) => {
   socket.on('room:create', ({ name }: { name: string }, cb?: Function) => {
     const roomId = makeRoomId();
@@ -393,6 +451,28 @@ io.on('connection', (socket) => {
       if (e instanceof GameError) return cb?.({ error: { code: e.code, message: e.message } });
       cb?.({ error: { code: 'UNKNOWN', message: 'Unknown error' } });
     }
+  });
+
+  socket.on('room:leave', (_: unknown, cb?: Function) => {
+    const s = socketToSession.get(socket.id);
+    if (!s) return cb?.({ ok: true });
+
+    socketToSession.delete(socket.id);
+    socket.leave(s.roomId);
+
+    const room = rooms.get(s.roomId);
+    if (!room) return cb?.({ ok: true });
+
+    removePlayerFromRoom(room, s.playerId);
+
+    const liveRoom = rooms.get(s.roomId);
+    if (!liveRoom) return cb?.({ ok: true });
+
+    if (liveRoom.phase === 'playing' && liveRoom.currentPlayerId) {
+      scheduleTurn(liveRoom.roomId);
+    }
+    broadcastRoom(liveRoom.roomId);
+    cb?.({ ok: true });
   });
 
   socket.on('disconnect', () => {

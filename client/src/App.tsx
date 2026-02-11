@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { Socket } from 'socket.io-client';
 
 import { createSocket } from './lib/socket';
@@ -35,8 +35,25 @@ function parseId(id: string): { rank: number; suit: Suit } {
   return { rank, suit };
 }
 
+type FlyingCard = {
+  key: string;
+  id: string;
+  rank: number;
+  suit: Suit;
+  red: boolean;
+  fromLeft: number;
+  fromTop: number;
+  width: number;
+  height: number;
+  dx: number;
+  dy: number;
+};
+
 function App() {
   const socketRef = useRef<Socket | null>(null);
+  const handCardRefs = useRef(new Map<string, HTMLButtonElement | null>());
+  const tableDropRef = useRef<HTMLDivElement | null>(null);
+  const flyCleanupTimerRef = useRef<number | null>(null);
 
   const [connected, setConnected] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -59,6 +76,8 @@ function App() {
   const [room, setRoom] = useState<RoomPublic | null>(null);
   const [hand, setHand] = useState<Card[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [flyingCards, setFlyingCards] = useState<FlyingCard[]>([]);
+  const [isFlyActive, setIsFlyActive] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const me = useMemo(() => {
@@ -133,6 +152,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (flyCleanupTimerRef.current !== null) window.clearTimeout(flyCleanupTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     const s = socketRef.current;
     if (!s) return;
     if (!connected) return;
@@ -159,6 +184,17 @@ function App() {
     setSession(next);
   }
 
+  function clearSessionState() {
+    localStorage.removeItem('tlmn:session');
+    setSession(null);
+    setRoom(null);
+    setHand([]);
+    setSelected(new Set());
+    setFlyingCards([]);
+    setIsFlyActive(false);
+    setErrorMsg(null);
+  }
+
   function toggleSelect(cardId: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -170,6 +206,54 @@ function App() {
 
   function onAutoSort() {
     setHand((prev) => sortHand(prev, 'group_combo'));
+  }
+
+  function buildFlyCards(cardIds: string[]): FlyingCard[] {
+    const targetRect = tableDropRef.current?.getBoundingClientRect();
+    if (!targetRect) return [];
+
+    return cardIds
+      .map((id, index) => {
+        const node = handCardRefs.current.get(id);
+        const fromRect = node?.getBoundingClientRect();
+        if (!fromRect) return null;
+
+        const { rank, suit } = parseId(id);
+        const red = suit === 'H' || suit === 'D';
+        const spreadOffset = (index - (cardIds.length - 1) / 2) * 26;
+        const toLeft = targetRect.left + targetRect.width / 2 - fromRect.width / 2 + spreadOffset;
+        const toTop = targetRect.top + targetRect.height / 2 - fromRect.height / 2;
+        return {
+          key: `${id}-${Date.now()}-${index}`,
+          id,
+          rank,
+          suit,
+          red,
+          fromLeft: fromRect.left,
+          fromTop: fromRect.top,
+          width: fromRect.width,
+          height: fromRect.height,
+          dx: toLeft - fromRect.left,
+          dy: toTop - fromRect.top
+        } satisfies FlyingCard;
+      })
+      .filter((card): card is FlyingCard => Boolean(card));
+  }
+
+  function startFlyToTable(cardIds: string[]) {
+    if (flyCleanupTimerRef.current !== null) window.clearTimeout(flyCleanupTimerRef.current);
+
+    const cards = buildFlyCards(cardIds);
+    if (!cards.length) return;
+
+    setFlyingCards(cards);
+    setIsFlyActive(false);
+    window.requestAnimationFrame(() => setIsFlyActive(true));
+    flyCleanupTimerRef.current = window.setTimeout(() => {
+      setIsFlyActive(false);
+      setFlyingCards([]);
+      flyCleanupTimerRef.current = null;
+    }, 380);
   }
 
   function emitWithAck<T>(event: string, payload: any): Promise<T> {
@@ -238,9 +322,11 @@ function App() {
 
   async function onPlay() {
     setErrorMsg(null);
+    const cardIds = Array.from(selected);
+    if (!cardIds.length) return;
     try {
-      const cardIds = Array.from(selected);
       await emitWithAck('turn:play', { cardIds });
+      startFlyToTable(cardIds);
       setSelected(new Set());
     } catch (e: any) {
       setErrorMsg(e?.code ? `${e.code}: ${e.message}` : String(e));
@@ -251,6 +337,16 @@ function App() {
     setErrorMsg(null);
     try {
       await emitWithAck('turn:pass', {});
+    } catch (e: any) {
+      setErrorMsg(e?.code ? `${e.code}: ${e.message}` : String(e));
+    }
+  }
+
+  async function onLeaveRoom() {
+    setErrorMsg(null);
+    try {
+      await emitWithAck('room:leave', {});
+      clearSessionState();
     } catch (e: any) {
       setErrorMsg(e?.code ? `${e.code}: ${e.message}` : String(e));
     }
@@ -271,6 +367,11 @@ function App() {
         <div className="pillRow">
           <div className={`pill ${connected ? 'ok' : 'warn'}`}>{connected ? 'socket: online' : 'socket: offline'}</div>
           {session?.roomId ? <div className="pill">room: {session.roomId}</div> : null}
+          {session ? (
+            <button className="btn ghost leaveBtn" onClick={onLeaveRoom} type="button">
+              Thoát bàn
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -316,88 +417,64 @@ function App() {
           </section>
         ) : (
           <section className="board">
-            <div className="col left">
-              <div className="panel">
-                <div className="panelHead">
-                  <h2 className="h2">Lobby</h2>
-                  <div className="meta">{room?.phase ?? '...'}</div>
-                </div>
-
-                <div className="players">
-                  {(room?.players ?? []).map((p) => {
-                    const isMe = p.playerId === session.playerId;
-                    const isTurn = room?.currentPlayerId === p.playerId && room?.phase === 'playing';
-                    return (
-                      <div key={p.playerId} className={`player ${isMe ? 'me' : ''} ${isTurn ? 'turn' : ''}`}>
-                        <div className="playerMain">
-                          <div className="playerName">{p.name}</div>
-                          <div className="playerMeta">
-                            {p.connected ? 'online' : 'offline'} • {p.cardsRemaining} lá
-                          </div>
-                        </div>
-                        <div className="tags">
-                          {isMe ? <span className="tag">you</span> : null}
-                          {p.ready ? <span className="tag ok">ready</span> : <span className="tag warn">wait</span>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="actions">
-                  <button
-                    className="btn"
-                    onClick={onToggleReady}
-                    disabled={!connected || !room || room.phase === 'playing'}
-                  >
-                    {me?.ready ? 'Unready' : 'Ready'}
-                  </button>
-                  <button
-                    className="btn primary"
-                    onClick={onStart}
-                    disabled={!connected || !room || room.phase !== 'lobby' || !isHost}
-                  >
-                    Start
-                  </button>
-                  {room?.phase === 'ended' && isHost ? (
-                    <button className="btn primary" onClick={onNewRound} disabled={!connected || !allReady}>
-                      Bắt đầu ván mới
-                    </button>
-                  ) : null}
-                </div>
-
-                {errorMsg ? <div className="toast err">{errorMsg}</div> : null}
+            <div className="panel table">
+              <div className="panelHead">
+                <h2 className="h2">Tay bài của bàn</h2>
+                <div className="meta">{room?.lastPlay ? `Lượt gần nhất: ${room.lastPlay.playerId}` : 'Chưa có lượt đánh'}</div>
               </div>
 
-              <div className="panel">
-                <div className="panelHead">
-                  <h2 className="h2">Bài vừa đánh</h2>
-                  <div className="meta">{room?.lastPlay ? `by ${room.lastPlay.playerId}` : '—'}</div>
-                </div>
-                <div className="lastPlay">
+              <div className="centerTable">
+                {(room?.players ?? []).slice(0, 4).map((p, idx) => {
+                  const seatClass = idx === 0 ? 'top' : idx === 1 ? 'right' : idx === 2 ? 'bottom' : 'left';
+                  const play = tablePlayByPlayer.get(p.playerId);
+                  return (
+                    <div key={p.playerId} className={`seat ${seatClass}`}>
+                      <div className="seatName">{p.name}</div>
+                      <div className="seatCards">
+                        {play?.cardIds?.length ? (
+                          play.cardIds.map((id) => {
+                            const { rank, suit } = parseId(id);
+                            const red = suit === 'H' || suit === 'D';
+                            return (
+                              <span key={`${p.playerId}-${id}`} className={`seatCard ${red ? 'red' : ''}`}>
+                                {rankLabel(rank)}
+                                {suitSymbol(suit)}
+                              </span>
+                            );
+                          })
+                        ) : (
+                          <span className="seatEmpty">...</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="tableDropTarget" ref={tableDropRef}>
                   {room?.lastPlay?.cardIds?.length ? (
-                    room.lastPlay.cardIds.map((id) => {
-                      const { rank, suit } = parseId(id);
-                      const red = suit === 'H' || suit === 'D';
-                      return (
-                        <div key={id} className={`miniCard ${red ? 'red' : ''}`}>
-                          <div className="miniTop">
-                            <span className="miniRank">{rankLabel(rank)}</span>
-                            <span className="miniSuit">{suitSymbol(suit)}</span>
-                          </div>
-                        </div>
-                      );
-                    })
+                    <>
+                      <div className="trickLabel">Bộ bài trên bàn</div>
+                      <div className="tableTrickCards">
+                        {room.lastPlay.cardIds.map((id) => {
+                          const { rank, suit } = parseId(id);
+                          const red = suit === 'H' || suit === 'D';
+                          return (
+                            <span key={`table-${id}`} className={`tableCard ${red ? 'red' : ''}`}>
+                              {rankLabel(rank)}
+                              {suitSymbol(suit)}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </>
                   ) : (
-                    <div className="empty">Chưa có lượt đánh.</div>
+                    <span className="seatEmpty">Bàn đang trống</span>
                   )}
                 </div>
               </div>
             </div>
 
-            <div className="col right">
-                <div className="panel table">
-                  <div className="panelHead">
+            <div className="panel handPanel">
+              <div className="panelHead">
                   <h2 className="h2">Tay bài của bạn</h2>
                   <div className="meta">
                     {room?.phase === 'playing'
@@ -410,35 +487,7 @@ function App() {
                           }`
                         : '—'}
                   </div>
-                  </div>
-
-                  <div className="centerTable">
-                    {(room?.players ?? []).slice(0, 4).map((p, idx) => {
-                      const seatClass = idx === 0 ? 'top' : idx === 1 ? 'right' : idx === 2 ? 'bottom' : 'left';
-                      const play = tablePlayByPlayer.get(p.playerId);
-                      return (
-                        <div key={p.playerId} className={`seat ${seatClass}`}>
-                          <div className="seatName">{p.name}</div>
-                          <div className="seatCards">
-                            {play?.cardIds?.length ? (
-                              play.cardIds.map((id) => {
-                                const { rank, suit } = parseId(id);
-                                const red = suit === 'H' || suit === 'D';
-                                return (
-                                  <span key={`${p.playerId}-${id}`} className={`seatCard ${red ? 'red' : ''}`}>
-                                    {rankLabel(rank)}
-                                    {suitSymbol(suit)}
-                                  </span>
-                                );
-                              })
-                            ) : (
-                              <span className="seatEmpty">...</span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+              </div>
 
                 <div className="hand">
                   {hand.map((card, i) => {
@@ -448,7 +497,10 @@ function App() {
                       <button
                         key={card.id}
                         className={`playCard ${red ? 'red' : ''} ${isSel ? 'sel' : ''}`}
-                        style={{ ['--i' as any]: i }}
+                        style={{ '--i': i } as CSSProperties}
+                        ref={(node) => {
+                          handCardRefs.current.set(card.id, node);
+                        }}
                         onClick={() => toggleSelect(card.id)}
                         type="button"
                       >
@@ -487,7 +539,58 @@ function App() {
                     Bỏ lượt
                   </button>
                 </div>
+            </div>
+
+            <div className="panel lobbyPanel">
+              <div className="panelHead">
+                <h2 className="h2">Lobby</h2>
+                <div className="meta">{room?.phase ?? '...'}</div>
               </div>
+
+              <div className="players">
+                {(room?.players ?? []).map((p) => {
+                  const isMe = p.playerId === session.playerId;
+                  const isTurn = room?.currentPlayerId === p.playerId && room?.phase === 'playing';
+                  return (
+                    <div key={p.playerId} className={`player ${isMe ? 'me' : ''} ${isTurn ? 'turn' : ''}`}>
+                      <div className="playerMain">
+                        <div className="playerName">{p.name}</div>
+                        <div className="playerMeta">
+                          {p.connected ? 'online' : 'offline'} • {p.cardsRemaining} lá
+                        </div>
+                      </div>
+                      <div className="tags">
+                        {isMe ? <span className="tag">you</span> : null}
+                        {p.ready ? <span className="tag ok">ready</span> : <span className="tag warn">wait</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="actions">
+                <button
+                  className="btn"
+                  onClick={onToggleReady}
+                  disabled={!connected || !room || room.phase === 'playing'}
+                >
+                  {me?.ready ? 'Unready' : 'Ready'}
+                </button>
+                <button
+                  className="btn primary"
+                  onClick={onStart}
+                  disabled={!connected || !room || room.phase !== 'lobby' || !isHost}
+                >
+                  Start
+                </button>
+                {room?.phase === 'ended' && isHost ? (
+                  <button className="btn primary" onClick={onNewRound} disabled={!connected || !allReady}>
+                    Bắt đầu ván mới
+                  </button>
+                ) : null}
+              </div>
+
+              {errorMsg ? <div className="toast err">{errorMsg}</div> : null}
             </div>
           </section>
         )}
@@ -524,6 +627,31 @@ function App() {
           </section>
         ) : null}
       </main>
+
+      {flyingCards.length ? (
+        <div className="flyLayer" aria-hidden="true">
+          {flyingCards.map((card, i) => {
+            const style = {
+              '--from-left': `${card.fromLeft}px`,
+              '--from-top': `${card.fromTop}px`,
+              '--w': `${card.width}px`,
+              '--h': `${card.height}px`,
+              '--dx': `${card.dx}px`,
+              '--dy': `${card.dy}px`,
+              '--delay': `${i * 24}ms`
+            } as CSSProperties;
+            return (
+              <div key={card.key} className={`flyCard ${card.red ? 'red' : ''} ${isFlyActive ? 'active' : ''}`} style={style}>
+                <div className="pcTop">
+                  <span className="pcRank">{rankLabel(card.rank)}</span>
+                  <span className="pcSuit">{suitSymbol(card.suit)}</span>
+                </div>
+                <div className="pcId">{card.id}</div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
       <footer className="foot">
         <div className="footNote">
