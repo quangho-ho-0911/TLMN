@@ -385,17 +385,12 @@ body {
 }
 
 .seatCard {
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.11);
-  border-radius: 8px;
-  padding: 3px 6px;
-  font-size: 12px;
-  color: #f8fffa;
+  color: #0a1510;
   animation: cardFlyIn 0.22s ease;
 }
 
 .seatCard.red {
-  color: #ffd0d0;
+  color: #9b1b1b;
 }
 
 .seatEmpty {
@@ -436,17 +431,33 @@ body {
 }
 
 .tableCard {
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  background: linear-gradient(155deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.06));
-  border-radius: 10px;
-  padding: 6px 8px;
-  font-size: 13px;
-  color: #f8fffa;
+  color: #0a1510;
   animation: cardFlyIn 0.26s ease;
 }
 
 .tableCard.red {
-  color: #ffd0d0;
+  color: #9b1b1b;
+}
+
+.miniPlayCard {
+  position: relative;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: linear-gradient(165deg, #fdfdfd 0%, #dce5db 100%);
+  min-width: 46px;
+  padding: 4px 6px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+}
+
+.miniPlayCard .pcRank,
+.miniPlayCard .pcSuit {
+  font-size: 14px;
+}
+
+.miniPlayCard .pcId {
+  margin-top: 8px;
+  font-size: 10px;
+  color: rgba(10, 21, 16, 0.76);
 }
 
 .handPanel {
@@ -470,7 +481,6 @@ body {
   min-height: 104px;
   text-align: left;
   cursor: pointer;
-  transform: translateY(16px);
   opacity: 0;
   animation: cardIn 0.26s ease forwards;
   animation-delay: calc(var(--i) * 20ms);
@@ -630,11 +640,9 @@ body {
 
 @keyframes cardIn {
   from {
-    transform: translateY(16px);
     opacity: 0;
   }
   to {
-    transform: translateY(0);
     opacity: 1;
   }
 }

@@ -35,6 +35,20 @@ function parseId(id: string): { rank: number; suit: Suit } {
   return { rank, suit };
 }
 
+function MiniPlayedCard({ id, className }: { id: string; className: string }) {
+  const { rank, suit } = parseId(id);
+  const red = suit === 'H' || suit === 'D';
+  return (
+    <div className={`${className} miniPlayCard ${red ? 'red' : ''}`}>
+      <div className="pcTop">
+        <span className="pcRank">{rankLabel(rank)}</span>
+        <span className="pcSuit">{suitSymbol(suit)}</span>
+      </div>
+      <div className="pcId">{id}</div>
+    </div>
+  );
+}
+
 type FlyingCard = {
   key: string;
   id: string;
@@ -433,14 +447,7 @@ function App() {
                       <div className="seatCards">
                         {play?.cardIds?.length ? (
                           play.cardIds.map((id) => {
-                            const { rank, suit } = parseId(id);
-                            const red = suit === 'H' || suit === 'D';
-                            return (
-                              <span key={`${p.playerId}-${id}`} className={`seatCard ${red ? 'red' : ''}`}>
-                                {rankLabel(rank)}
-                                {suitSymbol(suit)}
-                              </span>
-                            );
+                            return <MiniPlayedCard key={`${p.playerId}-${id}`} id={id} className="seatCard" />;
                           })
                         ) : (
                           <span className="seatEmpty">...</span>
@@ -455,14 +462,7 @@ function App() {
                       <div className="trickLabel">Bộ bài trên bàn</div>
                       <div className="tableTrickCards">
                         {room.lastPlay.cardIds.map((id) => {
-                          const { rank, suit } = parseId(id);
-                          const red = suit === 'H' || suit === 'D';
-                          return (
-                            <span key={`table-${id}`} className={`tableCard ${red ? 'red' : ''}`}>
-                              {rankLabel(rank)}
-                              {suitSymbol(suit)}
-                            </span>
-                          );
+                          return <MiniPlayedCard key={`table-${id}`} id={id} className="tableCard" />;
                         })}
                       </div>
                     </>
